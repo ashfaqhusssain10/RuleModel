@@ -160,7 +160,7 @@ Steamed Rice"""
                         unit = predictor.extract_unit(qty_str)
 
                         # Get item metadata
-                        std_item = predictor.standardize_Item_name(item)
+                        std_item = predictor.standardize_item_name(item)
                         mapped_item = getattr(predictor, 'Item_name_mapping', {}).get(std_item, item)
 
                         if mapped_item in predictor.item_metadata:
