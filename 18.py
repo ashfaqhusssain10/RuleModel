@@ -13,11 +13,10 @@ st.set_page_config(
 )
 
 # Define paths
-MODEL_DIR = "models"
-MODEL_PATH = f"{MODEL_DIR}/adash1.dill"
+MODEL_PATH = "adash1.dill"
 
 # Create model directory if it doesn't exist
-os.makedirs(MODEL_DIR, exist_ok=True)
+#os.makedirs(MODEL_DIR, exist_ok=True)
 
 # Custom CSS for better UI
 st.markdown("""
