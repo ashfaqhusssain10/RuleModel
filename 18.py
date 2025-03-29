@@ -14,7 +14,7 @@ st.set_page_config(
 
 # Define paths
 MODEL_DIR = "models"
-MODEL_PATH = f"{MODEL_DIR}/food_predictor_model.dill"
+MODEL_PATH = f"{MODEL_DIR}/adash1.dill"
 
 # Create model directory if it doesn't exist
 os.makedirs(MODEL_DIR, exist_ok=True)
