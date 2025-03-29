@@ -171,7 +171,7 @@ Steamed Rice"""
                         # Calculate price
                         try:
                             total_price, base_price_per_unit, price_per_person = predictor.calculate_price(
-                                total_qty_val, category, guest_count, item, predicted_unit=unit
+                                total_qty_val, category, guest_count, item, unit=unit
                             )
 
                             # Make sure we have numeric values
