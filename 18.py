@@ -3,6 +3,7 @@ import pandas as pd
 import dill
 import os
 import time
+import json
 
 # Set page configuration
 st.set_page_config(
@@ -173,7 +174,7 @@ Steamed Rice"""
                             total_price, base_price_per_unit, price_per_person = predictor.calculate_price(
                                 total_qty_val, category, guest_count, item, unit=unit
                             )
-
+                        
                             # Make sure we have numeric values
                             if hasattr(total_price, "item"):
                                 total_price = total_price.item()
@@ -181,29 +182,35 @@ Steamed Rice"""
                                 base_price_per_unit = base_price_per_unit.item()
                             if hasattr(price_per_person, "item"):
                                 price_per_person = price_per_person.item()
-
+                        
                             # Calculate per-person quantity
                             per_person_qty = total_qty_val / guest_count
-                            per_person_qty_str = f"{per_person_qty:.2f}{unit}"
-
-                            # Add to event cost
-                            total_event_cost += total_price
-                            if isinstance(qty_str, str) and qty_str.startswith('{'):
+                            
+                            # Format the total quantity display
+                            if isinstance(qty_str, dict):
+                                total_qty_display = qty_str.get('total', str(total_qty_val) + unit)
+                            elif isinstance(qty_str, str) and '{' in qty_str:
                                 try:
                                     qty_dict = json.loads(qty_str.replace("'", '"'))
-                                    total_qty_display = qty_dict.get('total', qty_str)
+                                    total_qty_display = qty_dict.get('total', str(total_qty_val) + unit)
                                 except:
                                     total_qty_display = qty_str
                             else:
-                                total_qty_display = qty_str
-
+                                total_qty_display = f"{total_qty_val}{unit}"
+                        
+                            # Calculate actual per-person cost for the item
+                            actual_per_person_cost = total_price / guest_count if guest_count > 0 else 0
+                        
+                            # Add to event cost
+                            total_event_cost += total_price
+                        
                             results.append({
                                 'Item': item,
                                 'Category': category,
                                 'Per Person Quantity': f"{per_person_qty:.2f}{unit}",
                                 'Total Quantity': total_qty_display,
                                 f'Price per {unit}': f"₹{base_price_per_unit:.2f}",
-                                'Price per Person': f"₹{price_per_person:.2f}",
+                                'Price per Person': f"₹{actual_per_person_cost:.2f}",  # Changed from price_per_person to actual_per_person_cost
                                 'Total Price': f"₹{total_price:.2f}"
                             })
 
