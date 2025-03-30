@@ -188,12 +188,20 @@ Steamed Rice"""
 
                             # Add to event cost
                             total_event_cost += total_price
+                            if isinstance(qty_str, str) and qty_str.startswith('{'):
+                                try:
+                                    qty_dict = json.loads(qty_str.replace("'", '"'))
+                                    total_qty_display = qty_dict.get('total', qty_str)
+                                except:
+                                    total_qty_display = qty_str
+                            else:
+                                total_qty_display = qty_str
 
                             results.append({
                                 'Item': item,
                                 'Category': category,
-                                'Per Person Quantity': per_person_qty_str,
-                                'Total Quantity': qty_str,
+                                'Per Person Quantity': f"{per_person_qty:.2f}{unit}",
+                                'Total Quantity': total_qty_display,
                                 f'Price per {unit}': f"₹{base_price_per_unit:.2f}",
                                 'Price per Person': f"₹{price_per_person:.2f}",
                                 'Total Price': f"₹{total_price:.2f}"
