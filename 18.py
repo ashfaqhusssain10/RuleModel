@@ -78,13 +78,13 @@ elif menu_items:
 
             total_price_sum += total_price
             total_per_person_price_sum += per_person_price
-
+            current_unit = unit 
             results.append({
                 "Item": item,
                 "Category": category,
                 "Per Person Weight": per_person_qty_str,
                 "Quantity": total_qty,
-                f"Base Price per {unit}": f"₹{base_price_per_unit:.2f}", 
+                f"Base Price per {current_unit}": f"₹{base_price_per_unit:.2f}", 
                 "Per Person Price (₹)": f"₹{per_person_price:.2f}",
                 "Total Price (₹)": f"₹{total_price:.2f}",
             })
