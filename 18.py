@@ -84,7 +84,7 @@ elif menu_items:
                 "Category": category,
                 "Per Person Weight": per_person_qty_str,
                 "Quantity": total_qty,
-                f"Base Price per {current_unit}": f"₹{base_price_per_unit:.2f}", 
+                "Base Price": f"₹{base_price_per_unit:.2f}", 
                 "Per Person Price (₹)": f"₹{per_person_price:.2f}",
                 "Total Price (₹)": f"₹{total_price:.2f}",
             })
@@ -92,8 +92,10 @@ elif menu_items:
         # Add Totals Row
         results.append({
             "Item": "**Total**",
+            "Category":"",
             "Quantity": "",
             "Per Person Weight": f"{total_weight:.2f}g | {total_volume:.2f}ml | {total_pieces:.2f}pcs",
+            "Base Price": "",
             "Per Person Price (₹)": f"₹{total_per_person_price_sum:.2f}",
             "Total Price (₹)": f"₹{total_price_sum:.2f}"
         })
