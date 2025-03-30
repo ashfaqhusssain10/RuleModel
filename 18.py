@@ -69,12 +69,10 @@ elif menu_items:
                     total_qty_val, category, guest_count, item, unit=qty_data['converted_unit']
                 )
             except Exception as e:
-                  st.warning(f"Error calculating price for {item}: {e}")
-                    st.warning(f"Error calculating price for {item}: {e}")
-                    # Provide default values if calculation fails
-                    total_price = 0.0
-                    base_price_per_unit = 0.0
-                    per_person_price = 0.0
+                st.warning(f"Error calculating price for {item}: {e}")
+                total_price = 0.0
+                base_price_per_unit = 0.0
+                per_person_price = 0.0
             # Totals accumulation
             if unit == "pcs":
                 total_pieces += per_person_qty_val
