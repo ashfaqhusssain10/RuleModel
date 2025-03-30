@@ -64,10 +64,17 @@ elif menu_items:
             category = item_meta.category if item_meta and hasattr(item_meta, "category") else predictor.guess_item_category(item)
 
             total_qty_val = predictor.extract_quantity_value(total_qty)
-            total_price, _, per_person_price = predictor.calculate_price(
-                total_qty_val, category, guest_count, item, unit=qty_data['converted_unit']
-            )
-
+            try:
+                total_price, base_price_per_unit, per_person_price = predictor.calculate_price(
+                    total_qty_val, category, guest_count, item, unit=qty_data['converted_unit']
+                )
+            except Exception as e:
+                  st.warning(f"Error calculating price for {item}: {e}")
+                    st.warning(f"Error calculating price for {item}: {e}")
+                    # Provide default values if calculation fails
+                    total_price = 0.0
+                    base_price_per_unit = 0.0
+                    per_person_price = 0.0
             # Totals accumulation
             if unit == "pcs":
                 total_pieces += per_person_qty_val
@@ -84,7 +91,7 @@ elif menu_items:
                 "Category": category,
                 "Per Person Weight": per_person_qty_str,
                 "Quantity": total_qty,
-                #"Base Price": f"₹{base_price_per_unit:.2f}", 
+                "Base Price": f"₹{base_price_per_unit:.2f}", 
                 "Per Person Price (₹)": f"₹{per_person_price:.2f}",
                 "Total Price (₹)": f"₹{total_price:.2f}",
             })
@@ -95,7 +102,7 @@ elif menu_items:
             "Category":"",
             "Quantity": "",
             "Per Person Weight": f"{total_weight:.2f}g | {total_volume:.2f}ml | {total_pieces:.2f}pcs",
-            #"Base Price": "",
+            "Base Price": "",
             "Per Person Price (₹)": f"₹{total_per_person_price_sum:.2f}",
             "Total Price (₹)": f"₹{total_price_sum:.2f}"
         })
