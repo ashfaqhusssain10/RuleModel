@@ -6,7 +6,7 @@ import dill
 st.set_page_config(layout="wide")
 
 # Define model path
-MODEL_PATH = "adash1.dill"
+MODEL_PATH = "adash2.dill"
 
 # 🔁 Load model only once
 @st.cache_resource
