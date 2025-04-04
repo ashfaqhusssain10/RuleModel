@@ -10,6 +10,216 @@ from xgboost import XGBRegressor
 # Suppress FutureWarnings globally
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
+
+
+class FoodItemMatcher:
+    """Two-tier hash table system for efficient food item matching."""
+
+    def __init__(self, item_metadata=None):
+        self.direct_lookup = {}  # Tier 1: Direct lookup hash table
+        self.token_to_items = {}  # Tier 2: Token-based lookup
+        self.category_items = {}  # Items organized by category
+
+        if item_metadata:
+            self.build_hash_tables(item_metadata)
+
+    def build_hash_tables(self, item_metadata):
+        """Build the two-tier hash table system from item metadata."""
+        # Reset tables
+        self.direct_lookup = {}
+        self.token_to_items = {}
+        self.category_items = {}
+
+        # Process each item
+        for item_name, metadata in item_metadata.items():
+            if not item_name or pd.isna(item_name):
+                continue
+
+            # Standardize name
+            std_name = self._standardize_name(item_name)
+
+            # Add to direct lookup (Tier 1)
+            self.direct_lookup[std_name] = item_name
+
+            # Add common variants
+            variants = self._generate_variants(std_name)
+            for variant in variants:
+                if variant not in self.direct_lookup:
+                    self.direct_lookup[variant] = item_name
+
+            # Add to token lookup (Tier 2)
+            tokens = self._tokenize(std_name)
+            for token in tokens:
+                if token not in self.token_to_items:
+                    self.token_to_items[token] = []
+                if item_name not in self.token_to_items[token]:
+                    self.token_to_items[token].append(item_name)
+
+            # Add to category items
+            category = metadata.category
+            if category not in self.category_items:
+                self.category_items[category] = []
+            self.category_items[category].append(item_name)
+
+    def find_item(self, query_item, item_metadata):
+        """Find a food item using the two-tier hash table approach."""
+        if not query_item or pd.isna(query_item):
+            return None, None
+
+        # Standardize query - handle '>' prefix automatically
+        std_query = self._standardize_name(query_item)
+        std_query = std_query.replace('> ', '').replace('>', '')  # Remove '>' prefixes
+
+        # Tier 1: Try direct lookup first (fast path)
+        if std_query in self.direct_lookup:
+            item_name = self.direct_lookup[std_query]
+            # Ensure item_name is a string, not a tuple
+            if isinstance(item_name, tuple) and len(item_name) > 0:
+                item_name = item_name[0]
+            if item_name in item_metadata:
+                return item_name, item_metadata[item_name]
+
+        # Additional direct lookups for common variations
+        # Try with spaces removed
+        compact_query = std_query.replace(' ', '')
+        for key in self.direct_lookup:
+            compact_key = key.replace(' ', '')
+            if compact_query == compact_key:
+                item_name = self.direct_lookup[key]
+                # Ensure item_name is a string, not a tuple
+                if isinstance(item_name, tuple) and len(item_name) > 0:
+                    item_name = item_name[0]
+                if item_name in item_metadata:
+                    return item_name, item_metadata[item_name]
+
+        # Tier 2: Enhanced token-based lookup
+        tokens = self._tokenize(std_query)
+        if tokens:
+            # Find candidates with improved scoring
+            candidates = {}
+            for token in tokens:
+                # Handle token variations (plurals, singulars)
+                token_variants = [token]
+                if token.endswith('s'):
+                    token_variants.append(token[:-1])  # Remove 's' for plurals
+                elif len(token) > 3:
+                    token_variants.append(token + 's')  # Add 's' for singulars
+
+                for variant in token_variants:
+                    if variant in self.token_to_items:
+                        for item_name in self.token_to_items[variant]:
+                            # Ensure item_name is a string, not a tuple
+                            if isinstance(item_name, tuple) and len(item_name) > 0:
+                                item_name = item_name[0]
+                            if item_name not in candidates:
+                                candidates[item_name] = 0
+                            candidates[item_name] += 1
+
+            # Enhance scoring with additional contextual factors
+            scored_candidates = []
+            for item_name, token_matches in candidates.items():
+                if item_name in item_metadata:
+                    item_tokens = self._tokenize(self._standardize_name(item_name))
+                    if not item_tokens:
+                        continue
+
+                    # Basic token match score
+                    token_score = token_matches / max(len(tokens), len(item_tokens))
+
+                    # Enhanced substring matching
+                    contains_score = 0
+                    if std_query in self._standardize_name(item_name):
+                        contains_score = 0.8
+                    elif self._standardize_name(item_name) in std_query:
+                        contains_score = 0.6
+
+                    # Word overlap score (considering word position)
+                    word_overlap = 0
+                    std_query_words = std_query.split()
+                    item_words = self._standardize_name(item_name).split()
+                    for i, qword in enumerate(std_query_words):
+                        for j, iword in enumerate(item_words):
+                            if qword == iword:
+                                # Words in same position get higher score
+                                pos_factor = 1.0 - 0.1 * abs(i - j)
+                                word_overlap += pos_factor
+
+                    if len(std_query_words) > 0:
+                        word_overlap_score = word_overlap / len(std_query_words)
+                    else:
+                        word_overlap_score = 0
+
+                    # Combined score with weights
+                    final_score = max(token_score * 0.4 + contains_score * 0.4 + word_overlap_score * 0.2,
+                                      contains_score)
+
+                    scored_candidates.append((item_name, final_score))
+
+            # Sort by score and get best match
+            if scored_candidates:
+                scored_candidates.sort(key=lambda x: x[1], reverse=True)
+                best_match = scored_candidates[0]
+
+                # Lower threshold for matching (0.4 instead of 0.5)
+                if best_match[1] >= 0.4:
+                    item_name = best_match[0]
+                    # Final check to ensure item_name is a string
+                    if isinstance(item_name, tuple) and len(item_name) > 0:
+                        item_name = item_name[0]
+                    return item_name, item_metadata[item_name]
+
+        return None, None
+
+    def _standardize_name(self, name):
+        """Standardize item name for matching."""
+        if pd.isna(name):
+            return ""
+        name = str(name).strip().lower()
+        name = " ".join(name.split())  # Normalize whitespace
+        return name
+
+    def _tokenize(self, text):
+        """Split text into tokens for matching."""
+        if not text:
+            return []
+
+        # Simple tokenization by whitespace
+        tokens = text.split()
+
+        # Remove very common words and short tokens
+        stop_words = {"and", "with", "the", "in", "of", "a", "an"}
+        tokens = [t for t in tokens if t not in stop_words and len(t) > 1]
+
+        return tokens
+
+    def _generate_variants(self, name):
+        """Generate common variants of a food item name."""
+        variants = []
+
+        # Common misspellings and variations
+        replacements = {
+            "biryani": ["biriyani", "briyani", "biryani"],
+            "chicken": ["chiken", "chikken", "checken"],
+            "paneer": ["panner", "panir", "pnr"],
+            "masala": ["masala", "masaala", "masalla"]
+        }
+
+        # Generate simple word order variations
+        words = name.split()
+        if len(words) > 1:
+            # Add reversed order for two-word items
+            variants.append(" ".join(reversed(words)))
+
+        # Apply common spelling variations
+        for word, alternatives in replacements.items():
+            if word in name:
+                for alt in alternatives:
+                    variant = name.replace(word, alt)
+                    variants.append(variant)
+
+        return variants
+
+
 # Configure logging for FoodCategoryRules
 logging.basicConfig(
     level=logging.INFO,
@@ -413,7 +623,23 @@ class FoodCategoryRules:
         return 0.0, inferred_unit
 
     def get_item_specific_quantity(self, item_name, guest_count, item_specific_data):
-        std_item_name = item_name.lower().strip()
+        """
+        Get item-specific quantity based on per-guest ratio.
+
+        Args:
+            item_name: Name of the item (string or tuple)
+            guest_count: Number of guests
+            item_specific_data: Dictionary of item-specific data
+
+        Returns:
+            Tuple of (quantity, unit) or (None, None) if not available
+        """
+        # Handle if item_name is a tuple (output from FoodItemMatcher)
+        if isinstance(item_name, tuple) and len(item_name) > 0:
+            item_name = item_name[0]  # Extract the string from the tuple
+
+        # Now proceed with the standard processing
+        std_item_name = item_name.lower().strip() if isinstance(item_name, str) else ""
         if std_item_name not in item_specific_data:
             return None, None
 
@@ -552,6 +778,7 @@ class HierarchicalFoodPredictor:
         self.custom_category_constraints = category_constraints or {}
         self.item_metadata = {}
         self.item_vc_mapping = {}
+        self.item_matcher =  None
         self.item_specific_data = {}
         if item_vc_file:
             self.load_item_vc_data(item_vc_file)
@@ -625,6 +852,15 @@ class HierarchicalFoodPredictor:
         return standardized
 
     def find_closest_item(self, item_name):
+        """Find the closest matching item using the FoodItemMatcher if available"""
+        # First try FoodItemMatcher if available
+        if hasattr(self, 'item_matcher') and self.item_matcher:
+            matched_item, _ = self.item_matcher.find_item(item_name, self.item_metadata)
+            if matched_item:
+                logger.info(f"FoodItemMatcher matched '{item_name}' to '{matched_item}'")
+                return matched_item
+
+        # Fall back to existing logic if FoodItemMatcher fails or isn't available
         if not self.item_metadata:
             return None
         std_name = self.standardize_item_name(item_name)
@@ -639,7 +875,7 @@ class HierarchicalFoodPredictor:
                 return known_name
             if std_name in std_known or std_known in std_name:
                 similarity = min(len(std_name), len(std_known)) / max(len(std_name), len(std_known))
-                if similarity > 0.99 and similarity >best_score:
+                if similarity > 0.99 and similarity > best_score:
                     best_score = similarity
                     best_match = known_name
                 continue
@@ -648,10 +884,10 @@ class HierarchicalFoodPredictor:
             std_known_words = set(std_known.split())
             common_words = std_name_words.intersection(std_known_words)
             if common_words:
-              similarity= len(common_words) / max(len(std_name_words), len(std_known_words))
-              if similarity > best_score:
-                best_score = similarity
-                best_match = known_name
+                similarity = len(common_words) / max(len(std_name_words), len(std_known_words))
+                if similarity > best_score:
+                    best_score = similarity
+                    best_match = known_name
         if best_score >= 0.99:
             logger.info(f"Fuzzy matched '{item_name}' to '{best_match}' with score {best_score:.2f}")
             return best_match
@@ -705,6 +941,141 @@ class HierarchicalFoodPredictor:
         logger.warning(f"Using default category 'Curries' for '{item_name}'")
         return "Curries"
 
+    def determine_item_properties(self, item_name):
+        """
+        More robust determination of item properties using metadata and pattern matching.
+        """
+        # Handle '>' prefix automatically
+        clean_item_name = item_name.replace('> ', '').replace('>', '') if isinstance(item_name, str) else item_name
+
+        # Start with defaults
+        properties = {
+            "category": None,
+            "unit": "g",
+            "is_veg": True
+        }
+
+        # Try direct match in metadata first (most reliable)
+        if clean_item_name in self.item_metadata:
+            return {
+                "category": self.item_metadata[clean_item_name].category,
+                "unit": self.item_metadata[clean_item_name].unit,
+                "is_veg": getattr(self.item_metadata[clean_item_name], "is_veg", True)
+            }
+
+        # Try finding closest item in metadata using enhanced matcher
+        mapped_item, _ = self.item_matcher.find_item(clean_item_name, self.item_metadata) if hasattr(self,
+                                                                                                     'item_matcher') else (
+            None, None)
+        if mapped_item and mapped_item in self.item_metadata:
+            return {
+                "category": self.item_metadata[mapped_item].category,
+                "unit": self.item_metadata[mapped_item].unit,
+                "is_veg": getattr(self.item_metadata[mapped_item], "is_veg", True)
+            }
+
+        # If no match in metadata, use enhanced category detection
+        item_lower = clean_item_name.lower() if isinstance(clean_item_name, str) else ""
+        properties["category"] = self.guess_item_category(clean_item_name)
+
+        # Enhanced unit detection based on both category and item name patterns
+        if properties["category"] in self.food_rules.category_rules:
+            rule = self.food_rules.category_rules[properties["category"]]
+            default_qty = rule.get("default_quantity", "0g")
+            unit = self.food_rules.extract_unit(default_qty)
+            if unit:
+                properties["unit"] = unit
+
+        # Specific patterns for determining unit type
+        # Desserts with piece-based units
+        if properties["category"] == "Desserts":
+            piece_patterns = ["jamun", "gulab", "rasgulla", "laddu", "burfi", "jalebi", "poornam", "buralu",
+                              "delight", "mysore pak", "badusha"]
+            if any(pattern in item_lower for pattern in piece_patterns):
+                properties["unit"] = "pcs"
+
+        # Appetizers with piece-based units
+        elif properties["category"] == "Appetizers":
+            piece_patterns = ["samosa", "tikka", "kebab", "roll", "cutlet", "patty", "vada", "bonda",
+                              "pakora", "spring roll"]
+            if any(pattern in item_lower for pattern in piece_patterns):
+                properties["unit"] = "pcs"
+
+        # Breakfast items with piece-based units
+        elif properties["category"] == "Breakfast":
+            piece_patterns = ["idli", "vada", "dosa", "uttapam", "poori", "paratha", "sandwich", "bun"]
+            if any(pattern in item_lower for pattern in piece_patterns):
+                properties["unit"] = "pcs"
+
+        # Breads are always pieces
+        elif properties["category"] in ["Breads", "Bread"]:
+            properties["unit"] = "pcs"
+
+        # Liquids are ml
+        elif "Liquids" in properties["category"] or properties["category"] in ["Welcome_Drinks", "Soups"]:
+            properties["unit"] = "ml"
+
+        # Determine veg/non-veg status with more patterns
+        non_veg_indicators = ["chicken", "mutton", "fish", "prawn", "beef", "pork", "egg", "meat",
+                              "non veg", "kodi", "murg", "lamb", "goat", "seafood", "keema", "crab"]
+        if any(indicator in item_lower for indicator in non_veg_indicators):
+            properties["is_veg"] = False
+
+        return properties
+
+    def build_menu_context(self, event_time, meal_type, event_type, guest_count, selected_items):
+        """Build comprehensive menu context to enhance prediction accuracy"""
+        # Initialize context
+        menu_context = {
+            'categories': [],
+            'items': selected_items,
+            'total_items': len(selected_items),
+            'meal_type': meal_type,
+            'event_time': event_time,
+            'event_type': event_type,
+            'guest_count': guest_count,
+            'items_by_category': {},
+            'item_properties': {},
+            'special_categories': ["Appetizers", "Desserts", "Breakfast"],
+            'items_by_unit_type': {}
+        }
+
+        # Process each item to determine properties and categories
+        for item in selected_items:
+            # Get item properties
+            properties = self.determine_item_properties(item)
+            category = properties["category"]
+            unit = properties["unit"]
+
+            # Store item properties
+            menu_context['item_properties'][item] = properties
+
+            # Organize by category
+            if category not in menu_context['items_by_category']:
+                menu_context['items_by_category'][category] = []
+                menu_context['categories'].append(category)
+            menu_context['items_by_category'][category].append(item)
+
+            # Organize by category and unit type (for special categories)
+            if category in menu_context['special_categories']:
+                if category not in menu_context['items_by_unit_type']:
+                    menu_context['items_by_unit_type'][category] = {'g': [], 'ml': [], 'pcs': []}
+                menu_context['items_by_unit_type'][category][unit].append(item)
+
+        # Add context flags for dependencies
+        menu_context['has_biryani'] = 'Biryani' in menu_context['categories']
+        menu_context['has_rice'] = 'Rice' in menu_context['categories']
+        menu_context['has_curries'] = 'Curries' in menu_context['categories']
+        menu_context['has_dal'] = 'Dal' in menu_context['categories']
+
+        return menu_context
+
+
+
+
+
+
+
     def build_item_name_mapping(self, data):
         logger.info("Building item_name mapping")
         self.item_name_mapping = {}
@@ -732,6 +1103,8 @@ class HierarchicalFoodPredictor:
             if std_name != item_name:
                 self.item_metadata[std_name] = ItemMetadata(category=category, unit=unit)
         logger.info(f"Built metadata for {len(self.item_metadata)} items")
+        self.item_matcher = FoodItemMatcher(self.item_metadata)
+        logger.info("Initialized FoodITemMatcher with item metadata")
 
     def fit(self, data):
         logger.info("Starting model training")
@@ -803,8 +1176,56 @@ class HierarchicalFoodPredictor:
             self.item_models[item_name].fit(X_item_scaled, item_per_person['per_person_quantity'])
         logger.info("Model training completed")
 
+    def identify_main_items(self, menu_context):
+        """
+        Identify the main items in the menu (Biryani, Flavored Rice, Steamed Rice)
+
+        Args:
+            menu_context: The menu context dictionary built by build_menu_context
+
+        Returns:
+            Dictionary with main item categories found and their specific items
+        """
+        main_categories = ["Biryani", "Flavored_Rice", "Rice"]
+        found_main_items = {
+            "has_main_item": False,
+            "categories_found": [],
+            "items_by_category": {},
+            "primary_main_item": None
+        }
+
+        # Check if any main categories exist in the menu
+        for category in main_categories:
+            if category in menu_context['categories'] or category in menu_context['items_by_category']:
+                found_main_items["has_main_item"] = True
+                found_main_items["categories_found"].append(category)
+
+                # Get items in this category
+                if category in menu_context['items_by_category']:
+                    found_main_items["items_by_category"][category] = menu_context['items_by_category'][category]
+
+        # Determine primary main item based on priority: Biryani > Flavored_Rice > Rice
+        for priority_category in main_categories:
+            if priority_category in found_main_items["categories_found"]:
+                found_main_items["primary_main_category"] = priority_category
+                if found_main_items["items_by_category"].get(priority_category):
+                    found_main_items["primary_main_item"] = found_main_items["items_by_category"][priority_category][0]
+                break
+
+        return found_main_items
+
     def predict(self, event_time, meal_type, event_type, guest_count, selected_items):
         logger.info(f"Making prediction for event: {event_type}, {event_time}, {meal_type}, {guest_count} guests")
+
+        # Build menu context - NEW FEATURE
+        menu_context = self.build_menu_context(event_time, meal_type, event_type, guest_count, selected_items)
+
+        # Identify main items in the menu - NEW FEATURE
+        main_items_info = self.identify_main_items(menu_context)
+        logger.info(f"Main items identified: {main_items_info['categories_found']}")
+        if main_items_info.get('primary_main_item'):
+            logger.info(f"Primary main item: {main_items_info['primary_main_item']}")
+
         input_data = pd.DataFrame({'Event_Time': [event_time], 'Meal_Time': [meal_type], 'Event_Type': [event_type]})
         X = self.prepare_features(input_data)
         predictions = {}
@@ -820,7 +1241,7 @@ class HierarchicalFoodPredictor:
                 mapped_item = self.find_closest_item(item)
                 if mapped_item:
                     self.item_name_mapping[std_item] = mapped_item
-                    #self.item_name_mapping[mapped_item] = mapped_item
+                    # self.item_name_mapping[mapped_item] = mapped_item
             if mapped_item and mapped_item in self.item_metadata:
                 category = self.item_metadata[mapped_item].category
                 if category not in items_by_category:
@@ -856,7 +1277,8 @@ class HierarchicalFoodPredictor:
             if category in self.category_models:
                 X_cat_scaled = self.category_scalers[category].transform(X)
                 ml_prediction = float(self.category_models[category].predict(X_cat_scaled)[0])
-                qty, unit = self.food_rules.apply_category_rules(category, guest_count, len(items), total_items=total_items)
+                qty, unit = self.food_rules.apply_category_rules(category, guest_count, len(items),
+                                                                 total_items=total_items)
                 if qty > 0:
                     category_per_person[category] = qty
                     category_quantities[category] = {"value": qty, "unit": unit}
@@ -874,6 +1296,116 @@ class HierarchicalFoodPredictor:
                 if qty is not None and unit is not None:
                     item_quantities[item] = {"value": qty, "unit": unit}
 
+        # NEW FEATURE: Apply main item adjustments for both the main item itself and complementary items
+        if main_items_info["has_main_item"] and main_items_info.get("primary_main_category"):
+            primary_main = main_items_info["primary_main_category"]
+
+            # FIRST, adjust the main item quantity itself based on its role in the meal
+            if primary_main == "Rice" and "Rice" in category_quantities:
+                # Check if this is the only main item (no Biryani or Flavored_Rice)
+                if "Biryani" not in items_by_category and "Flavored_Rice" not in items_by_category:
+                    # Increase Rice quantity when it's the ONLY main item
+                    orig_qty = category_quantities["Rice"]["value"]
+                    # Increase to 250g per person (or whatever is appropriate)
+                    adjusted_qty = max(orig_qty, 400.0)  # At least 400g per person
+                    category_quantities["Rice"]["value"] = adjusted_qty
+                    logger.info(
+                        f"Main item adjustment: Increased Rice quantity as primary main item ({orig_qty:.2f} -> {adjusted_qty:.2f})")
+                    # Directly update category_per_person as well
+                    if "Rice" in category_per_person:
+                        category_per_person["Rice"] = adjusted_qty
+
+            elif primary_main == "Biryani" and "Biryani" in category_quantities:
+                # For Biryani as primary main, ensure minimum quantity (especially if it's the only main item)
+                orig_qty = category_quantities["Biryani"]["value"]
+                # Ensure at least 550g per person for Biryani as sole main item
+                if "Rice" not in items_by_category and "Flavored_Rice" not in items_by_category:
+                    adjusted_qty = max(orig_qty, 550.0)
+                    category_quantities["Biryani"]["value"] = adjusted_qty
+                    logger.info(
+                        f"Main item adjustment: Increased Biryani quantity as primary main item ({orig_qty:.2f} -> {adjusted_qty:.2f})")
+                    # Directly update category_per_person as well
+                    if "Biryani" in category_per_person:
+                        category_per_person["Biryani"] = adjusted_qty
+
+            elif primary_main == "Flavored_Rice" and "Flavored_Rice" in category_quantities:
+                # For Flavored Rice as primary main, ensure minimum quantity
+                orig_qty = category_quantities["Flavored_Rice"]["value"]
+                if "Rice" not in items_by_category and "Biryani" not in items_by_category:
+                    adjusted_qty = max(orig_qty, 250.0)
+                    category_quantities["Flavored_Rice"]["value"] = adjusted_qty
+                    logger.info(
+                        f"Main item adjustment: Increased Flavored Rice quantity as primary main item ({orig_qty:.2f} -> {adjusted_qty:.2f})")
+                    # Directly update category_per_person as well
+                    if "Flavored_Rice" in category_per_person:
+                        category_per_person["Flavored_Rice"] = adjusted_qty
+
+            # THEN adjust quantities for items that complement the main item
+            for category in category_quantities:
+                # Skip the main category itself
+                if category == primary_main:
+                    continue
+
+                # Apply main-item specific adjustments
+                if primary_main == "Biryani":
+                    # Adjust quantities for items that pair with Biryani
+                    if category == "Raitha":
+                        orig_qty = category_quantities[category]["value"]
+                        # Increase raitha quantity for biryani
+                        adjusted_qty = orig_qty * 1.2
+                        category_quantities[category]["value"] = adjusted_qty
+                        logger.info(
+                            f"Main item adjustment: Increased {category} quantity for Biryani ({orig_qty:.2f} → {adjusted_qty:.2f})")
+                    elif category == "Salan":
+                        orig_qty = category_quantities[category]["value"]
+                        # Increase salan quantity for biryani
+                        adjusted_qty = orig_qty * 1.15
+                        category_quantities[category]["value"] = adjusted_qty
+                        logger.info(
+                            f"Main item adjustment: Increased {category} quantity for Biryani ({orig_qty:.2f} → {adjusted_qty:.2f})")
+                    elif category in ["Rice", "Flavored_Rice"]:
+                        # Reduce other rice quantities when biryani is present
+                        orig_qty = category_quantities[category]["value"]
+                        adjusted_qty = orig_qty * 0.7
+                        category_quantities[category]["value"] = adjusted_qty
+                        logger.info(
+                            f"Main item adjustment: Reduced {category} quantity due to Biryani ({orig_qty:.2f} → {adjusted_qty:.2f})")
+
+                elif primary_main == "Flavored_Rice":
+                    # Adjust quantities for items that pair with Flavored Rice
+                    if category == "Rice":
+                        # Reduce plain rice when flavored rice is present
+                        orig_qty = category_quantities[category]["value"]
+                        adjusted_qty = orig_qty * 0.7
+                        category_quantities[category]["value"] = adjusted_qty
+                        logger.info(
+                            f"Main item adjustment: Reduced {category} quantity due to Flavored Rice ({orig_qty:.2f} → {adjusted_qty:.2f})")
+                    elif category == "Curries":
+                        # Might want more curry with flavored rice
+                        orig_qty = category_quantities[category]["value"]
+                        adjusted_qty = orig_qty * 1.1
+                        category_quantities[category]["value"] = adjusted_qty
+                        logger.info(
+                            f"Main item adjustment: Increased {category} quantity for Flavored Rice ({orig_qty:.2f} → {adjusted_qty:.2f})")
+
+                elif primary_main == "Rice":
+                    # Adjust quantities for items that pair with plain Rice
+                    if category == "Curries":
+                        # More curry with plain rice
+                        orig_qty = category_quantities[category]["value"]
+                        adjusted_qty = orig_qty * 1.2
+                        category_quantities[category]["value"] = adjusted_qty
+                        logger.info(
+                            f"Main item adjustment: Increased {category} quantity for Rice ({orig_qty:.2f} → {adjusted_qty:.2f})")
+                    elif category == "Dal":
+                        # More dal with plain rice
+                        orig_qty = category_quantities[category]["value"]
+                        adjusted_qty = orig_qty * 1.15
+                        category_quantities[category]["value"] = adjusted_qty
+                        logger.info(
+                            f"Main item adjustment: Increased {category} quantity for Rice ({orig_qty:.2f} → {adjusted_qty:.2f})")
+
+        # Continue with existing logic
         for category, items in items_by_category.items():
             dependent_categories = self.food_rules.get_dependent_categories(category)
             for dep in dependent_categories:
@@ -1180,20 +1712,3 @@ def load_and_train_model(data_path, item_vc_file="Book1.xlsx", item_data_file="i
     predictor = HierarchicalFoodPredictor(category_constraints=category_constraints, item_vc_file=item_vc_file, item_data_file=item_data_file)
     predictor.fit(data)
     return predictor
-
-def main():
-    """Main function to run the predictor from the terminal."""
-    # Load and train the model
-    try:
-        predictor = load_and_train_model(r"C:\Users\Syed Ashfaque Hussai\OneDrive\Desktop\CraftMyplate Machine Learning Task\DB211.xlsx",
-                                         item_vc_file=r"C:\Users\Syed Ashfaque Hussai\OneDrive\Desktop\CraftMyplate Machine Learning Task\Book1.xlsx",
-                                         item_data_file=r"C:\Users\Syed Ashfaque Hussai\OneDrive\Desktop\CraftMyplate Machine Learning Task\item_data.csv")
-    except Exception as e:
-        print(f"Error loading and training model: {e}")
-        return
-
-    # Get predictions from terminal
-    predictor.get_predictions_from_terminal()
-
-if __name__ == "__main__":
-    main()
